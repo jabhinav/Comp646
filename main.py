@@ -18,6 +18,7 @@ from stable_baselines3 import PPO
 from imitation.data import rollout
 from imitation.algorithms.adversarial.gail import GAIL
 from imitation.util.util import make_vec_env
+from stable_baselines3.common.envs import BitFlippingEnv
 
 
 def play(env, model, render_dir: str = './env_renders', num_episodes: int = 5):
@@ -29,9 +30,9 @@ def play(env, model, render_dir: str = './env_renders', num_episodes: int = 5):
 		state_renders = [env.render(obs)]
 		while True:
 			action, _states = model.predict(obs, deterministic=True)
-			obs, reward, truncated, done, info = env.step(action)
+			obs, reward, done, truncated, info = env.step(action)
 			state_renders.append(env.render(obs))
-			if done:
+			if done or truncated:
 				print("Reward:", reward)
 				success = success + 1 if done and not truncated else success
 				break
@@ -129,7 +130,10 @@ def dqn_learn():
 				policy_kwargs=config['policy_kwargs'],
 				verbose=1,
 				tensorboard_log=os.path.join(logging_dir, "runs"),
-				exploration_fraction=0.4,)
+				# exploration_fraction=0.5,
+				# exploration_initial_eps=1.0,
+				# exploration_final_eps=0.1,
+				)
 	model.learn(total_timesteps=config['total_timesteps'],
 				progress_bar=True,
 				callback=WandbCallback(model_save_path=os.path.join(logging_dir, "models"), verbose=2))
@@ -172,8 +176,8 @@ def expert():
 
 if __name__ == "__main__":
 	# expert()
-	# dqn_learn()
-	ppo_learn()
+	dqn_learn()
+	# ppo_learn()
 	
 	# from stable_baselines3.common.env_checker import check_env
 	# check_env(GymKarelWorld((7, 7), env_type='fixed'))

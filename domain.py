@@ -1,5 +1,5 @@
-from typing import Tuple
-
+from collections import OrderedDict
+from typing import Any, Dict, Optional, Tuple, Union
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
@@ -24,10 +24,10 @@ class KarelWorld:
 		
 		# # Define Rewards
 		self.r_goal = 1  # For reaching the goal with the marker
-		self.r_marker = 1  # For picking up the marker
+		self.r_invalid = -1  # For reaching the goal without the marker
+		self.r_pickup = 0.5  # For picking up the marker. Should be less than r_goal
 		self.r_step = -0.05  # For taking a step
 		self.r_obstacle = -1  # For hitting an obstacle or the wall
-		self.r_invalid = -1  # For reaching the goal without the marker
 	
 		# # Environment Type
 		self.env_type = env_type
@@ -146,7 +146,7 @@ class KarelWorld:
 		return self.state, info
 	
 	@staticmethod
-	def move_robot(state, robot_pos, has_marker):
+	def update_state(state, robot_pos, has_marker):
 		"""
 		Move the robot to the specified position
 		:param state: The current state of the world
@@ -185,87 +185,83 @@ class KarelWorld:
 		3: Move Right
 		:return: The next state, reward and done flag
 		"""
+		# Declare Default Flags
+		has_marker: bool = False
+		picked_marker: bool = False
+		reached_goal: bool = False
+		
 		curr_state = self.state
-		robot_pos = self.get_robot_pos()
-		marker_pos = self.get_marker_pos()
+		curr_robot_pos = self.get_robot_pos()
+		curr_marker_pos = self.get_marker_pos()
 		obstacles_pos = self.get_obstacles_pos()
 		goal_pos = self.get_goal_pos()
 		
 		# Check if the action is valid
 		if action not in [0, 1, 2, 3]:
 			raise ValueError("Invalid action")
-		
-		orig_robot_pos = robot_pos.copy()
-		has_marker = np.all(robot_pos == marker_pos)  # This will be true if the robot reaches or has the marker
-		
-		hit_wall = False
-		
+			
 		# # First update the robot position based on the action (grid world index starts from 0 in the top left corner)
+		hit_wall: bool = False
+		next_robot_pos = curr_robot_pos.copy()
 		# Move Up [If you are at the top row, then you can't move up]
 		if action == 0:
-			if robot_pos[0] > 0:
-				robot_pos[0] -= 1
+			if curr_robot_pos[0] > 0:
+				next_robot_pos[0] -= 1
 			else:
 				hit_wall = True
 		# Move Down [If you are at the bottom row, then you can't move down]
 		elif action == 1:
-			if robot_pos[0] < self.world_size[0] - 1:
-				robot_pos[0] += 1
+			if curr_robot_pos[0] < self.world_size[0] - 1:
+				next_robot_pos[0] += 1
 			else:
 				hit_wall = True
 		# Move Left [If you are at the leftmost column, then you can't move left]
 		elif action == 2:
-			if robot_pos[1] > 0:
-				robot_pos[1] -= 1
+			if curr_robot_pos[1] > 0:
+				next_robot_pos[1] -= 1
 			else:
 				hit_wall = True
 		# Move Right [If you are at the rightmost column, then you can't move right]
 		elif action == 3:
-			if robot_pos[1] < self.world_size[1] - 1:
-				robot_pos[1] += 1
+			if curr_robot_pos[1] < self.world_size[1] - 1:
+				next_robot_pos[1] += 1
 			else:
 				hit_wall = True
 		else:
 			raise ValueError("Invalid action: {}".format(action))
 		
 		# Check if the robot is at the obstacle position
-		hit_obstacle = np.any([np.all(robot_pos == pos) for pos in obstacles_pos])
-		
-		# Check if the robot is at the goal position
-		reached_goal = np.all(robot_pos == goal_pos)
+		hit_obstacle: bool = np.any([np.all(curr_robot_pos == pos) for pos in obstacles_pos])
 		
 		if hit_obstacle or hit_wall:
 			# Robot stays in the same position -> No change in the state
 			next_state = curr_state
 			reward = self.r_obstacle
 			done = False
-		
-		elif reached_goal:
-			# Check if the robot has the marker
-			if has_marker:
-				# Robot wins the game ->
-				# Since the robot has the marker and moves to the goal position, the marker is dropped
-				next_state = self.move_robot(curr_state, robot_pos, has_marker)
-				reward = self.r_goal
-				done = True
-			else:
-				# Robot loses the game ->
-				# Since the robot does not have the marker and moves to the goal position, the marker is not dropped
-				next_state = self.move_robot(curr_state, orig_robot_pos, has_marker)
-				reward = self.r_invalid
-				done = True
 		else:
-			# Robot moves to the new position
-			next_state = self.move_robot(curr_state, robot_pos, has_marker)
-			reward = self.r_step
-			done = False
+			# Check if the robot has the marker
+			has_marker: bool = np.all(curr_robot_pos == curr_marker_pos)
+			next_state = self.update_state(curr_state, curr_robot_pos, has_marker)
+	
+			# Check if the robot has reached the marker position
+			picked_marker: bool = np.all(next_robot_pos == curr_marker_pos) and not has_marker
+		
+			# Check if the robot is has reached the goal position
+			reached_goal: bool = np.all(next_robot_pos == goal_pos)
+			
+			if reached_goal:
+				reward = self.r_goal if has_marker else self.r_invalid
+				done = True
+			elif picked_marker:
+				reward = self.r_pickup
+				done = False
+			else:
+				reward = self.r_step
+				done = False
 		
 		info = {
-			"robot_pos": robot_pos,
-			"marker_pos": marker_pos,
-			"obstacles_pos": obstacles_pos,
-			"goal_pos": goal_pos,
 			"has_marker": has_marker,
+			"picked_marker": picked_marker,
 			"hit_obstacle": hit_obstacle,
 			"hit_wall": hit_wall,
 			"reached_goal": reached_goal
@@ -305,7 +301,7 @@ class KarelWorld:
 	
 	def get_robot_pos(self, state=None):
 		"""
-		:return: the position of the robot in the state
+		:return: the position of the robot in the state (channel idx: 0)
 		"""
 		if state is None:
 			state = self.state
@@ -313,7 +309,7 @@ class KarelWorld:
 	
 	def get_marker_pos(self, state=None):
 		"""
-		:return: the position of the marker in the state
+		:return: the position of the marker in the state (channel idx: 1)
 		"""
 		if state is None:
 			state = self.state
@@ -321,7 +317,7 @@ class KarelWorld:
 	
 	def get_obstacles_pos(self, state=None):
 		"""
-		:return: the position of the obstacles in the state
+		:return: the position of the obstacles in the state (channel idx: 2)
 		"""
 		if state is None:
 			state = self.state
@@ -329,11 +325,27 @@ class KarelWorld:
 	
 	def get_goal_pos(self, state=None):
 		"""
-		:return: the position of the goal in the state
+		:return: the position of the goal in the state  (channel idx: 3)
 		"""
 		if state is None:
 			state = self.state
 		return np.argwhere(state[:, :, 3] == 1)[0]
+	
+	def get_goal_state(self):
+		"""
+		:return: the goal state
+		"""
+		goal_state = self.state.copy()
+		# Remove marker and robot -> set to 0
+		goal_state[:, :, 0] = 0
+		goal_state[:, :, 1] = 0
+		
+		# Put the marker and the robot at the goal position
+		goal_pos = self.get_goal_pos()
+		goal_state[goal_pos[0], goal_pos[1], 0] = 1
+		goal_state[goal_pos[0], goal_pos[1], 1] = 1
+		
+		return goal_state
 
 
 class GymKarelWorld(gym.Env):
@@ -359,13 +371,11 @@ class GymKarelWorld(gym.Env):
 		self.max_steps = max_steps
 		self.curr_step = 0
 		
-	def step(self, action: np.ndarray):
+	def step(self, action: Union[np.ndarray, int]):
 		"""
 		:param action: The action to be taken
 		:return: The next state, reward, done, info
 		"""
-		truncated = False
-		
 		# Convert action to int if np.ndarray using argmax and shape == (action_space.n,) else just use the action using int
 		if isinstance(action, np.ndarray) and action.shape == (self.action_space.n,):
 			action = int(np.argmax(action))
@@ -375,22 +385,111 @@ class GymKarelWorld(gym.Env):
 			action = int(action)
 		
 		state, reward, done, info = self.world.step(action)
-		
+		info["is_success"] = done
 		# Check if the episode is done or truncated due to max steps (set done to True)
 		self.curr_step += 1
-		if self.curr_step >= self.max_steps:
-			truncated = True if not done else False
-			done = True
-		
-		return state, reward, truncated, done, info
+		truncated = self.curr_step >= self.max_steps
+		return state, reward, done, truncated, info
 	
-	def reset(self):
+	def reset(
+			self, *, seed: Optional[int] = None, options: Optional[Dict] = None
+	) -> Tuple[Dict[str, Union[int, np.ndarray]], Dict]:
 		"""
 		:return: The initial state
 		"""
 		self.curr_step = 0
 		state, info = self.world.reset()
 		return state, info
+	
+	def render(self, mode='human'):
+		"""
+		:param mode: The mode to render the environment
+		:return: The rendered environment
+		"""
+		return self.world.render()
+	
+	def close(self):
+		"""
+		Close the environment
+		:return:
+		"""
+		pass
+
+
+class HERGymKarelWorld(gym.Env):
+	"""
+	Environment for Karel in Gym with HER Support. Same as the GymKarelWorld class but with HER support.
+	> Desired goal is the marker at the goal position.
+	> Achieved goal is the marker at the current position.
+	"""
+	
+	def __init__(self, world_size: tuple, env_type: str = 'fixed', max_steps: int = 100):
+		"""
+		:param world_size: The size of the world
+		:param env_type: The type of the environment. Can be either 'fixed' or 'random'
+		"""
+		super(HERGymKarelWorld, self).__init__()
+		self.world: KarelWorld = KarelWorld(world_size, env_type)
+		self.action_space = spaces.Discrete(4)
+		self.observation_space = spaces.Dict(
+			{
+				'observation': spaces.Box(low=0, high=1,
+										  shape=(world_size[0], world_size[1], self.world.num_channels),
+										  dtype=np.float32),
+				'achieved_goal': spaces.Box(low=0, high=1,
+											shape=(world_size[0], world_size[1], self.world.num_channels),
+											dtype=np.float32),
+				'desired_goal': spaces.Box(low=0, high=1,
+										   	shape=(world_size[0], world_size[1], self.world.num_channels),
+										   	dtype=np.float32),
+			}
+		)
+		self.max_steps = max_steps
+		self.curr_step = 0
+	
+	def reset(
+			self, *, seed: Optional[int] = None, options: Optional[Dict] = None
+	) -> Tuple[Dict[str, Union[int, np.ndarray]], Dict]:
+		"""
+		:return: The initial state
+		"""
+		self.curr_step = 0
+		state, info = self.world.reset()
+		return self._get_obs(state), info
+	
+	def _get_obs(self, state) -> Dict[str, Union[int, np.ndarray]]:
+		"""
+		Helper to create the observation.
+
+		:return: The current observation.
+		"""
+		return OrderedDict(
+			[
+				("observation", state.copy()),
+				("achieved_goal", state.copy()),
+				("desired_goal", self.world.get_goal_state().copy()),
+			]
+		)
+	
+	def step(self, action: np.ndarray):
+		"""
+		:param action: The action to be taken
+		:return: The next state, reward, done, info
+		"""
+		# Convert action to int if np.ndarray using argmax and shape == (action_space.n,) else just use the action using int
+		if isinstance(action, np.ndarray) and action.shape == (self.action_space.n,):
+			action = int(np.argmax(action))
+		elif isinstance(action, np.ndarray) and action.shape == (1,):
+			action = int(action[0])
+		elif isinstance(action, np.ndarray) and action.shape == ():
+			action = int(action)
+		
+		state, reward, done, info = self.world.step(action)
+		info["is_success"] = done
+		# Check if the episode is done or truncated due to max steps (set done to True)
+		self.curr_step += 1
+		truncated = self.curr_step >= self.max_steps
+		return self._get_obs(state), reward, done, truncated, info
 	
 	def render(self, mode='human'):
 		"""
