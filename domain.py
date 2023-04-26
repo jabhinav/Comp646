@@ -1,8 +1,9 @@
 from collections import OrderedDict
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import List, Dict, Optional, Tuple, Union
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
+from expertPolicy import ExpertPolicy
 
 
 class KarelWorld:
@@ -20,13 +21,13 @@ class KarelWorld:
 		self.state = self.empty_state.copy()
 		
 		# # Define Actions
-		self.action_space = {0: "Move Up", 1: "Move Down", 2: "Move Left", 3: "Move Right"}
+		self.action_mapping = {0: "Move Up", 1: "Move Down", 2: "Move Left", 3: "Move Right"}
 		
 		# # Define Rewards
 		self.r_goal = 1  # For reaching the goal with the marker
 		self.r_invalid = -1  # For reaching the goal without the marker
 		self.r_pickup = 0.5  # For picking up the marker. Should be less than r_goal
-		self.r_step = -0.05  # For taking a step
+		self.r_step = 0  # For taking a step
 		self.r_obstacle = -1  # For hitting an obstacle or the wall
 	
 		# # Environment Type
@@ -34,6 +35,9 @@ class KarelWorld:
 		
 		# Other Flags
 		self.marker_picked = False
+		
+		# Setup Expert Policy
+		self.expert_policy = ExpertPolicy(self)
 		
 	def random_world(self, obstacles_pos=None, robot_pos=None, marker_pos=None, goal_pos=None):
 		"""
@@ -101,11 +105,22 @@ class KarelWorld:
 		# Reset Flags
 		self.marker_picked = False
 		
-		if self.env_type == "random":
-			self.state, info = self.random_world()
+		# Define elements of the world
+		obstacles_pos, robot_pos, marker_pos, goal_pos = None, None, None, None
 		
-		elif self.env_type == "fixed_all":
-			# Specify and fix obstacles
+		# Fix Obstacles only
+		if self.env_type == "fixed_obs":
+			if self.world_size == (7, 7):
+				obstacles_pos = [np.array([0, 0]), np.array([1, 1]), np.array([5, 5])]
+			elif self.world_size == (5, 5):
+				obstacles_pos = [np.array([1, 3]), np.array([2, 0]), np.array([3, 2]), np.array([4, 0]), np.array([4, 3])]
+			elif self.world_size == (3, 3):
+				obstacles_pos = [np.array([1, 1])]
+			else:
+				raise ValueError("Specify fixed obstacles for this world size : {}".format(self.world_size))
+		
+		# Fix all elements
+		if self.env_type == "fixed_all":
 			if self.world_size == (7, 7):
 				obstacles_pos = [np.array([0, 0]), np.array([1, 1]), np.array([5, 5])]
 				robot_pos = np.array([3, 5])
@@ -123,27 +138,21 @@ class KarelWorld:
 				goal_pos = np.array([2, 0])
 			else:
 				raise ValueError("Specify fixed obstacles for this world size : {}".format(self.world_size))
-			
-			self.state, info = self.random_world(obstacles_pos=obstacles_pos, robot_pos=robot_pos,
-												 marker_pos=marker_pos, goal_pos=goal_pos)
+
+
+		state, info = self.random_world(obstacles_pos=obstacles_pos, robot_pos=robot_pos,
+											 marker_pos=marker_pos, goal_pos=goal_pos)
 		
-		elif self.env_type == "fixed_obs":
-			# Specify and fix obstacles
-			if self.world_size == (7, 7):
-				obstacles_pos = [np.array([0, 0]), np.array([1, 1]), np.array([5, 5])]
-			elif self.world_size == (5, 5):
-				obstacles_pos = [np.array([1, 3]), np.array([2, 0]), np.array([3, 2]), np.array([4, 0]), np.array([4, 3])]
-			elif self.world_size == (3, 3):
-				obstacles_pos = [np.array([1, 1])]
-			else:
-				raise ValueError("Specify fixed obstacles for this world size : {}".format(self.world_size))
-			
-			self.state, info = self.random_world(obstacles_pos=obstacles_pos)
+		# Check reachability of the goal (using Expert Policy) otherwise reset
+		expert_trajectory: List[int] = self.expert_policy.get_expert_trajectory(state)
+		while len(expert_trajectory) == 0:
+			print("[Info] Resetting the world as the marker + goal are not reachable")
+			state, info = self.random_world(obstacles_pos=obstacles_pos, robot_pos=robot_pos,
+											marker_pos=marker_pos, goal_pos=goal_pos)
+			expert_trajectory = self.expert_policy.get_expert_trajectory(state)
 		
-		else:
-			raise ValueError("Invalid environment type : {}".format(self.env_type))
-		
-		return self.state, info
+		self.state = state
+		return state, info
 	
 	@staticmethod
 	def update_state(state, robot_pos, has_marker):
@@ -230,24 +239,25 @@ class KarelWorld:
 		else:
 			raise ValueError("Invalid action: {}".format(action))
 		
-		# Check if the robot is at the obstacle position
-		hit_obstacle: bool = np.any([np.all(curr_robot_pos == pos) for pos in obstacles_pos])
+		# Check if the robot has hit an obstacle [use next_robot_pos]
+		hit_obstacle: bool = np.any([np.all(next_robot_pos == pos) for pos in obstacles_pos])
 		
 		if hit_obstacle or hit_wall:
 			# Robot stays in the same position -> No change in the state
 			next_state = curr_state
 			reward = self.r_obstacle
-			done = False
+			done = True
 		else:
-			# Check if the robot has the marker
+			# Check if the robot has the marker [use curr_robot_pos]
 			has_marker: bool = np.all(curr_robot_pos == curr_marker_pos)
-			next_state = self.update_state(curr_state, curr_robot_pos, has_marker)
 	
-			# Check if the robot has reached the marker position
+			# Check if the robot has reached the marker position [use next_robot_pos]
 			picked_marker: bool = np.all(next_robot_pos == curr_marker_pos) and not has_marker
 		
-			# Check if the robot is has reached the goal position
+			# Check if the robot is has reached the goal position [use next_robot_pos]
 			reached_goal: bool = np.all(next_robot_pos == goal_pos)
+			
+			next_state = self.update_state(curr_state, next_robot_pos, has_marker)
 			
 			if reached_goal:
 				reward = self.r_goal if has_marker else self.r_invalid
@@ -304,7 +314,7 @@ class KarelWorld:
 		:return: the position of the robot in the state (channel idx: 0)
 		"""
 		if state is None:
-			state = self.state
+			state = self.state.copy()
 		return np.argwhere(state[:, :, 0] == 1)[0]
 	
 	def get_marker_pos(self, state=None):
@@ -312,7 +322,7 @@ class KarelWorld:
 		:return: the position of the marker in the state (channel idx: 1)
 		"""
 		if state is None:
-			state = self.state
+			state = self.state.copy()
 		return np.argwhere(state[:, :, 1] == 1)[0]
 	
 	def get_obstacles_pos(self, state=None):
@@ -320,7 +330,7 @@ class KarelWorld:
 		:return: the position of the obstacles in the state (channel idx: 2)
 		"""
 		if state is None:
-			state = self.state
+			state = self.state.copy()
 		return np.argwhere(state[:, :, 2] == 1)
 	
 	def get_goal_pos(self, state=None):
@@ -328,14 +338,18 @@ class KarelWorld:
 		:return: the position of the goal in the state  (channel idx: 3)
 		"""
 		if state is None:
-			state = self.state
+			state = self.state.copy()
 		return np.argwhere(state[:, :, 3] == 1)[0]
 	
-	def get_goal_state(self):
+	def get_goal_state(self, state=None):
 		"""
 		:return: the goal state
 		"""
-		goal_state = self.state.copy()
+		if state is None:
+			goal_state = self.state.copy()
+		else:
+			goal_state = state.copy()
+		
 		# Remove marker and robot -> set to 0
 		goal_state[:, :, 0] = 0
 		goal_state[:, :, 1] = 0
@@ -371,6 +385,8 @@ class GymKarelWorld(gym.Env):
 		self.max_steps = max_steps
 		self.curr_step = 0
 		
+		self.action_mapping: Dict[int, str] = self.world.action_mapping
+		
 	def step(self, action: Union[np.ndarray, int]):
 		"""
 		:param action: The action to be taken
@@ -385,7 +401,7 @@ class GymKarelWorld(gym.Env):
 			action = int(action)
 		
 		state, reward, done, info = self.world.step(action)
-		info["is_success"] = done
+		info["is_success"] = done and reward == 1
 		# Check if the episode is done or truncated due to max steps (set done to True)
 		self.curr_step += 1
 		truncated = self.curr_step >= self.max_steps
@@ -446,6 +462,8 @@ class HERGymKarelWorld(gym.Env):
 		)
 		self.max_steps = max_steps
 		self.curr_step = 0
+		
+		self.action_mapping: Dict[int, str] = self.world.action_mapping
 	
 	def reset(
 			self, *, seed: Optional[int] = None, options: Optional[Dict] = None
@@ -504,3 +522,20 @@ class HERGymKarelWorld(gym.Env):
 		:return:
 		"""
 		pass
+	
+	@staticmethod
+	def compute_reward(achieved_goal: np.ndarray, desired_goal: np.ndarray, info: dict):
+		"""
+		Compute the reward for the given achieved goal and desired goal.
+
+		:param achieved_goal: The achieved goal
+		:param desired_goal: The desired goal
+		:param info: The info dict
+		:return: The reward
+		"""
+		# As we are using a vectorized version, we need to keep track of the `batch_size`
+		batch_size = achieved_goal.shape[0] if len(achieved_goal.shape) > 3 else 1
+		# Compute the reward for each element in the batch
+		distance = np.linalg.norm(achieved_goal - desired_goal, axis=-1)
+		return -(distance > 0).astype(np.float32)
+
