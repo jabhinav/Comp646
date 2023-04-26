@@ -260,7 +260,6 @@ if __name__ == "__main__":
 	
 	# expert()
 	# expert_step()
-	bc_learn()
 	# dqn_learn()
 	# ppo_learn()
 	# random_play()
