@@ -7,3 +7,31 @@ Task: Collect Marker and Bring it to the Goal
 ## Visualisation of the Expert Policy
 https://user-images.githubusercontent.com/19610318/233808198-f87970fd-4173-4066-8fab-5b24ab603564.mov
 
+## Installation
+```
+# Clone the repository
+git clone <repo_url>
+
+# Install the requirements
+pip install -r requirements.txt
+```
+
+## Project Structure
+```
+main.py: Main script to run the experiments (includes expert policy and DQN)
+config.py: Contains the hyperparameters for the experiments
+domain.py: Contains the environment class for Karel Grid World
+networks.py: Contains the neural network architecture for DQN (MLP and CNN)
+expertPolicy.py: Contains the expert policy for Karel Grid World
+utils.py: Contains the utility functions for the project
+```
+
+## Usage
+```
+# Change the hyperparameters in config.py (comments specify the suggested values)
+
+# Run the script to learn the policy using DQN
+python main.py
+```
+
+## Results
