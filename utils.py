@@ -1,11 +1,11 @@
 import os
-from typing import List
+from typing import List, Union
 
 import cv2
 import numpy as np
 from matplotlib import pyplot as plt, patches as mpatches
 
-from domain import KarelWorld
+from domain import KarelWorld, GymKarelWorld, HERGymKarelWorld
 
 
 def create_video_from_images(img_paths, video_name, fps=1):
@@ -24,7 +24,7 @@ def create_video_from_images(img_paths, video_name, fps=1):
 	
 	for image in img_paths:
 		video.write(cv2.imread(image))
-
+	
 	# Save the video at './video_name.mp4'
 	cv2.destroyAllWindows()
 	video.release()
@@ -60,7 +60,6 @@ def plot_world(world: KarelWorld, img_name: str = 'world.png'):
 
 
 def visualise_policy(world: KarelWorld, states: List[np.ndarray], img_dir: str):
-	
 	img_paths: List[str] = []
 	for i in range(len(states)):
 		plt.figure(figsize=(world.world_size[0], world.world_size[1]))
@@ -79,10 +78,49 @@ def visualise_policy(world: KarelWorld, states: List[np.ndarray], img_dir: str):
 		img_path = os.path.join(img_dir, "world_{}.png".format(i))
 		plt.savefig(img_path)
 		img_paths.append(img_path)
-		
+	
 	# Create a video from the images
 	create_video_from_images(img_paths, os.path.join(img_dir, "world.mp4"))
 	
 	# Clear plots
 	plt.clf()
 	plt.close()
+
+
+def play(env: Union[KarelWorld, GymKarelWorld, HERGymKarelWorld],
+		 model,
+		 render_dir: str = './env_renders',
+		 num_episodes: int = 5):
+	if not os.path.exists(render_dir):
+		os.makedirs(render_dir, exist_ok=True)
+	
+	# Enjoy trained agent
+	success_rate = 0
+	for i in range(num_episodes):
+		obs, info = env.reset()
+		# plot_world(env.world, img_name=os.path.join('./logging', "episode_{}.png".format(i)))
+		
+		state_renders = [env.render(obs)]
+		actions, rewards = [], []
+		while True:
+			action, _states = model.predict(obs, deterministic=True)
+			actions.append(env.action_mapping[int(action)])
+			
+			obs, reward, done, truncated, info = env.step(action)
+			state_renders.append(env.render(obs))
+			rewards.append(reward)
+			
+			if done or truncated:
+				success_rate += info['is_success']
+				break
+		
+		print("\n # ############################################### #")
+		print("Episode: ", i, "\nActions: ", actions, "\nRewards: ", rewards)
+		print("\nTotal Reward: ", sum(rewards), "\nSuccess: ", info['is_success'])
+		
+		# Let's save the images
+		img_dir = os.path.join(render_dir, "episode_{}".format(i))
+		os.makedirs(img_dir, exist_ok=True)
+		visualise_policy(env.world, state_renders, img_dir)
+	
+	print("Test Success Rate: ", success_rate / num_episodes)

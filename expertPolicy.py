@@ -96,10 +96,16 @@ class ExpertPolicy:
 		goal_pos: Tuple[int, int] = tuple(self.world.get_goal_pos(state))
 		
 		# Find the shortest path from robot to marker
-		robot_to_marker_path: List[int] = self.get_shortest_path(robot_pos, marker_pos)
+		try:
+			robot_to_marker_path: List[int] = self.get_shortest_path(robot_pos, marker_pos)
+		except nx.exception.NetworkXNoPath:
+			return []
 		
 		# Find the shortest path from marker to goal
-		marker_to_goal_path: List[int] = self.get_shortest_path(marker_pos, goal_pos)
+		try:
+			marker_to_goal_path: List[int] = self.get_shortest_path(marker_pos, goal_pos)
+		except nx.exception.NetworkXNoPath:
+			return []
 		
 		# Combine the two paths (both must be non-empty)
 		if robot_to_marker_path and marker_to_goal_path:

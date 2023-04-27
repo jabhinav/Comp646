@@ -1,7 +1,9 @@
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from gymnasium import spaces
-import torch.nn as nn
+from typing import Union, Dict
+
 import torch as th
+import torch.nn as nn
+from gymnasium import spaces
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 
 class CustomMLP(BaseFeaturesExtractor):
@@ -10,10 +12,14 @@ class CustomMLP(BaseFeaturesExtractor):
 	    :param features_dim: (int) Number of features extracted.
 	        This corresponds to the number of unit for the last layer.
 	"""
-	def __init__(self, observation_space: spaces.Box, features_dim: int = 256):
+	
+	def __init__(self, observation_space: Union[spaces.Box, spaces.Dict], features_dim: int = 256):
 		super().__init__(observation_space, features_dim)
 		# We assume HxWxC images (channels last)
 		# Re-ordering will be done by pre-preprocessing or wrapper
+		if isinstance(observation_space, spaces.Dict):
+			observation_space = observation_space["observation"]
+		
 		n_flattened_size = observation_space.shape[0] * observation_space.shape[1] * observation_space.shape[2]
 		self.mlp = nn.Sequential(
 			nn.Flatten(),
@@ -27,8 +33,45 @@ class CustomMLP(BaseFeaturesExtractor):
 		# Compute shape by doing one forward pass
 		with th.no_grad():
 			n_flatten = self.mlp(th.as_tensor(observation_space.sample()[None]).float()).shape[1]
-			
-		self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
 		
-	def forward(self, observations: th.Tensor) -> th.Tensor:
+		self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+	
+	def forward(self, observations: Union[Dict[str, th.Tensor], th.Tensor]) -> th.Tensor:
+		if isinstance(observations, dict):
+			observations = observations["observation"]
+		return self.linear(self.mlp(observations))
+
+
+class CustomCNN(BaseFeaturesExtractor):
+	"""
+	    :param observation_space: (gym.Space)
+	    :param features_dim: (int) Number of features extracted.
+	        This corresponds to the number of unit for the last layer.
+	"""
+	
+	def __init__(self, observation_space: Union[spaces.Box, spaces.Dict], features_dim: int = 256):
+		super().__init__(observation_space, features_dim)
+		# We assume HxWxC images (channels last)
+		# Re-ordering will be done by pre-preprocessing or wrapper
+		if isinstance(observation_space, spaces.Dict):
+			observation_space = observation_space["observation"]
+		
+		#  > single-layer CNN with 32 1 × 1 filters (no padding or stride)
+		#  > LeakyReLU non-linearity
+		#  > Flatten
+		self.net = nn.Sequential(
+			nn.Conv2d(observation_space.shape[0], 32, kernel_size=1),
+			nn.LeakyReLU(),
+			nn.Flatten(),
+		)
+		
+		# Compute shape by doing one forward pass
+		with th.no_grad():
+			n_flatten = self.net(th.as_tensor(observation_space.sample()[None]).float()).shape[1]
+		
+		self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+	
+	def forward(self, observations: Union[Dict[str, th.Tensor], th.Tensor]) -> th.Tensor:
+		if isinstance(observations, dict):
+			observations = observations["observation"]
 		return self.linear(self.mlp(observations))

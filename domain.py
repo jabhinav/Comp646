@@ -1,13 +1,15 @@
 from collections import OrderedDict
 from typing import List, Dict, Optional, Tuple, Union
+
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
+
 from expertPolicy import ExpertPolicy
 
 
 class KarelWorld:
-	def __init__(self, world_size: Tuple[int, int], env_type: str = "random"):
+	def __init__(self, world_size: Tuple[int, int], env_type: str = "random", penalise_steps: bool = False):
 		# state space
 		self.world_size = world_size
 		assert self.world_size[0] == self.world_size[1], "World must be square"
@@ -27,9 +29,9 @@ class KarelWorld:
 		self.r_goal = 1  # For reaching the goal with the marker
 		self.r_invalid = -1  # For reaching the goal without the marker
 		self.r_pickup = 0.5  # For picking up the marker. Should be less than r_goal
-		self.r_step = 0  # For taking a step
+		self.r_step = 0.0 if not penalise_steps else -0.05  # For taking a step
 		self.r_obstacle = -1  # For hitting an obstacle or the wall
-	
+		
 		# # Environment Type
 		self.env_type = env_type
 		
@@ -38,7 +40,7 @@ class KarelWorld:
 		
 		# Setup Expert Policy
 		self.expert_policy = ExpertPolicy(self)
-		
+	
 	def random_world(self, obstacles_pos=None, robot_pos=None, marker_pos=None, goal_pos=None):
 		"""
 		This function defines a random world. Choices made are:
@@ -109,11 +111,12 @@ class KarelWorld:
 		obstacles_pos, robot_pos, marker_pos, goal_pos = None, None, None, None
 		
 		# Fix Obstacles only
-		if self.env_type == "fixed_obs":
+		if self.env_type == "fixed":
 			if self.world_size == (7, 7):
 				obstacles_pos = [np.array([0, 0]), np.array([1, 1]), np.array([5, 5])]
 			elif self.world_size == (5, 5):
-				obstacles_pos = [np.array([1, 3]), np.array([2, 0]), np.array([3, 2]), np.array([4, 0]), np.array([4, 3])]
+				obstacles_pos = [np.array([1, 3]), np.array([2, 0]), np.array([3, 2]), np.array([4, 0]),
+								 np.array([4, 3])]
 			elif self.world_size == (3, 3):
 				obstacles_pos = [np.array([1, 1])]
 			else:
@@ -127,7 +130,8 @@ class KarelWorld:
 				marker_pos = np.array([4, 0])
 				goal_pos = np.array([5, 6])
 			elif self.world_size == (5, 5):
-				obstacles_pos = [np.array([1, 3]), np.array([2, 0]), np.array([3, 2]), np.array([4, 0]), np.array([4, 3])]
+				obstacles_pos = [np.array([1, 3]), np.array([2, 0]), np.array([3, 2]), np.array([4, 0]),
+								 np.array([4, 3])]
 				robot_pos = np.array([0, 4])
 				marker_pos = np.array([3, 4])
 				goal_pos = np.array([1, 2])
@@ -138,10 +142,9 @@ class KarelWorld:
 				goal_pos = np.array([2, 0])
 			else:
 				raise ValueError("Specify fixed obstacles for this world size : {}".format(self.world_size))
-
-
+		
 		state, info = self.random_world(obstacles_pos=obstacles_pos, robot_pos=robot_pos,
-											 marker_pos=marker_pos, goal_pos=goal_pos)
+										marker_pos=marker_pos, goal_pos=goal_pos)
 		
 		# Check reachability of the goal (using Expert Policy) otherwise reset
 		expert_trajectory: List[int] = self.expert_policy.get_expert_trajectory(state)
@@ -208,7 +211,7 @@ class KarelWorld:
 		# Check if the action is valid
 		if action not in [0, 1, 2, 3]:
 			raise ValueError("Invalid action")
-			
+		
 		# # First update the robot position based on the action (grid world index starts from 0 in the top left corner)
 		hit_wall: bool = False
 		next_robot_pos = curr_robot_pos.copy()
@@ -250,10 +253,10 @@ class KarelWorld:
 		else:
 			# Check if the robot has the marker [use curr_robot_pos]
 			has_marker: bool = np.all(curr_robot_pos == curr_marker_pos)
-	
+			
 			# Check if the robot has reached the marker position [use next_robot_pos]
 			picked_marker: bool = np.all(next_robot_pos == curr_marker_pos) and not has_marker
-		
+			
 			# Check if the robot is has reached the goal position [use next_robot_pos]
 			reached_goal: bool = np.all(next_robot_pos == goal_pos)
 			
@@ -371,13 +374,14 @@ class GymKarelWorld(gym.Env):
 	"""
 	metadata = {'render.modes': ['human']}
 	
-	def __init__(self, world_size: tuple, env_type: str = 'fixed', max_steps: int = 100):
+	def __init__(self, world_size: tuple, env_type: str = 'fixed', max_steps: int = 100,
+				 penalise_steps: bool = False):
 		"""
 		:param world_size: The size of the world
 		:param env_type: The type of the environment. Can be either 'fixed' or 'random'
 		"""
 		super(GymKarelWorld, self).__init__()
-		self.world: KarelWorld = KarelWorld(world_size, env_type)
+		self.world: KarelWorld = KarelWorld(world_size, env_type, penalise_steps)
 		self.action_space = spaces.Discrete(4)
 		self.observation_space = spaces.Box(low=0, high=1,
 											shape=(world_size[0], world_size[1], self.world.num_channels),
@@ -386,7 +390,7 @@ class GymKarelWorld(gym.Env):
 		self.curr_step = 0
 		
 		self.action_mapping: Dict[int, str] = self.world.action_mapping
-		
+	
 	def step(self, action: Union[np.ndarray, int]):
 		"""
 		:param action: The action to be taken
@@ -439,13 +443,13 @@ class HERGymKarelWorld(gym.Env):
 	> Achieved goal is the marker at the current position.
 	"""
 	
-	def __init__(self, world_size: tuple, env_type: str = 'fixed', max_steps: int = 100):
+	def __init__(self, world_size: tuple, env_type: str = 'fixed', max_steps: int = 100, penalise_steps: bool = False):
 		"""
 		:param world_size: The size of the world
 		:param env_type: The type of the environment. Can be either 'fixed' or 'random'
 		"""
 		super(HERGymKarelWorld, self).__init__()
-		self.world: KarelWorld = KarelWorld(world_size, env_type)
+		self.world: KarelWorld = KarelWorld(world_size, env_type, penalise_steps)
 		self.action_space = spaces.Discrete(4)
 		self.observation_space = spaces.Dict(
 			{
@@ -456,8 +460,8 @@ class HERGymKarelWorld(gym.Env):
 											shape=(world_size[0], world_size[1], self.world.num_channels),
 											dtype=np.float32),
 				'desired_goal': spaces.Box(low=0, high=1,
-										   	shape=(world_size[0], world_size[1], self.world.num_channels),
-										   	dtype=np.float32),
+										   shape=(world_size[0], world_size[1], self.world.num_channels),
+										   dtype=np.float32),
 			}
 		)
 		self.max_steps = max_steps
@@ -503,7 +507,7 @@ class HERGymKarelWorld(gym.Env):
 			action = int(action)
 		
 		state, reward, done, info = self.world.step(action)
-		info["is_success"] = done
+		info["is_success"] = done and reward == 1
 		# Check if the episode is done or truncated due to max steps (set done to True)
 		self.curr_step += 1
 		truncated = self.curr_step >= self.max_steps
@@ -535,7 +539,10 @@ class HERGymKarelWorld(gym.Env):
 		"""
 		# As we are using a vectorized version, we need to keep track of the `batch_size`
 		batch_size = achieved_goal.shape[0] if len(achieved_goal.shape) > 3 else 1
+		# Flatten the BSxHxWxC image into BSx(H*W*C) vector
+		achieved_goal = achieved_goal.reshape(batch_size, -1)
+		desired_goal = desired_goal.reshape(batch_size, -1)
+		
 		# Compute the reward for each element in the batch
 		distance = np.linalg.norm(achieved_goal - desired_goal, axis=-1)
 		return -(distance > 0).astype(np.float32)
-
