@@ -60,18 +60,24 @@ class CustomCNN(BaseFeaturesExtractor):
 		#  > LeakyReLU non-linearity
 		#  > Flatten
 		self.net = nn.Sequential(
-			nn.Conv2d(observation_space.shape[0], 32, kernel_size=1),
+			nn.Conv2d(4, 32, kernel_size=1),
 			nn.LeakyReLU(),
 			nn.Flatten(),
 		)
 		
 		# Compute shape by doing one forward pass
 		with th.no_grad():
-			n_flatten = self.net(th.as_tensor(observation_space.sample()[None]).float()).shape[1]
+			# Reshape the observation space to have channels first i.e. B x H x W x C -> B x C x H x W
+			_observation = observation_space.sample()[None]
+			_observation = th.as_tensor(_observation).float().permute(0, 3, 1, 2)
+			n_flatten = self.net(_observation).shape[1]
+			# n_flatten = self.net(th.as_tensor(observation_space.sample()[None]).float()).shape[1]
 		
 		self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
 	
 	def forward(self, observations: Union[Dict[str, th.Tensor], th.Tensor]) -> th.Tensor:
 		if isinstance(observations, dict):
 			observations = observations["observation"]
-		return self.linear(self.mlp(observations))
+		# Reshape the observation space to have channels first
+		observations = observations.permute(0, 3, 1, 2)
+		return self.linear(self.net(observations))

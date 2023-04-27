@@ -28,7 +28,7 @@ def random_DQN_play(model_path: str):
 	render_dir = os.path.join(logging_dir, "env_renders")
 	
 	env = GymKarelWorld((config['world_size'], config['world_size']),
-						env_type=config['env_type'],
+							env_type=config['env_type'],
 						max_steps=config['max_steps'])
 	
 	play(env, model, render_dir)
@@ -67,15 +67,16 @@ def dqn_learn():
 				policy_kwargs=config['policy_kwargs'],
 				verbose=1,
 				tensorboard_log=os.path.join(logging_dir, "runs"),
-				exploration_fraction=0.4,
-				exploration_initial_eps=1.0,
-				exploration_final_eps=0.1,
-				# learning_starts=config["total_timesteps"]//4,
+				exploration_fraction=config["exploration_fraction"],
+				exploration_initial_eps=config["exploration_initial_eps"],
+				exploration_final_eps=config["exploration_final_eps"],
+				learning_starts=config["learning_starts"],
 				)
 	
-	model.learn(total_timesteps=config['total_timesteps'],
-				progress_bar=True,
-				callback=WandbCallback(model_save_path=os.path.join(logging_dir, "models"), verbose=2))
+	model.learn(
+		total_timesteps=config['total_timesteps'], progress_bar=True,
+		callback=WandbCallback(model_save_path=os.path.join(logging_dir, "models"), verbose=2),
+	)
 	
 	model.save("dqn_karel")
 	print("Time taken: ", round(time() - ts, 3))
